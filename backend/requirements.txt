@@ -42,7 +42,8 @@ opentelemetry-sdk==1.22.0
 
 # Security Scanning
 bandit==1.7.7
-safety==2.3.5
+# safety removed - conflicts with black/pytest packaging requirements
+# Run safety checks via: pip install safety && safety check
 
 # Testing
 pytest==7.4.4
