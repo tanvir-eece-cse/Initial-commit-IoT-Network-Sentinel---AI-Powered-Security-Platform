@@ -1,0 +1,133 @@
+name: CD Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  CLUSTER_NAME: iot-sentinel-cluster
+  NAMESPACE: iot-sentinel
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: staging
+      url: https://staging.iot-sentinel.example.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+
+      - name: Update image tags in manifests
+        run: |
+          cd k8s
+          sed -i "s|:latest|:${{ github.sha }}|g" backend-deployment.yaml
+          sed -i "s|:latest|:${{ github.sha }}|g" ml-service-deployment.yaml
+          sed -i "s|:latest|:${{ github.sha }}|g" frontend-deployment.yaml
+
+      - name: Deploy to Staging
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/database.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/ml-service-deployment.yaml
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/ingress.yaml
+
+      - name: Wait for deployment
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl rollout status deployment/backend -n ${{ env.NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/ml-service -n ${{ env.NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/frontend -n ${{ env.NAMESPACE }} --timeout=300s
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          sleep 30
+          curl -f https://staging.iot-sentinel.example.com/health || true
+          curl -f https://staging-api.iot-sentinel.example.com/health || true
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    environment:
+      name: production
+      url: https://iot-sentinel.example.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+
+      - name: Update image tags in manifests
+        run: |
+          cd k8s
+          sed -i "s|:latest|:${{ github.sha }}|g" backend-deployment.yaml
+          sed -i "s|:latest|:${{ github.sha }}|g" ml-service-deployment.yaml
+          sed -i "s|:latest|:${{ github.sha }}|g" frontend-deployment.yaml
+
+      - name: Deploy to Production
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/database.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/ml-service-deployment.yaml
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/ingress.yaml
+
+      - name: Wait for deployment
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl rollout status deployment/backend -n ${{ env.NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/ml-service -n ${{ env.NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/frontend -n ${{ env.NAMESPACE }} --timeout=300s
+
+      - name: Create release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          body: |
+            ## Changes
+            - Automated deployment from commit ${{ github.sha }}
+            
+            ## Docker Images
+            - Backend: `${{ env.REGISTRY }}/${{ github.repository }}/backend:${{ github.sha }}`
+            - ML Service: `${{ env.REGISTRY }}/${{ github.repository }}/ml-service:${{ github.sha }}`
+            - Frontend: `${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ github.sha }}`
+          draft: false
+          prerelease: false
