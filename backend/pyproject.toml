@@ -1,0 +1,17 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",  # Line too long
+    "F401",  # Unused imports (handled by IDE)
+    "E402",  # Module level import not at top
+    "F841",  # Local variable assigned but never used
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"conftest.py" = ["F401", "F811"]
+"test_*.py" = ["F401", "F811"]
